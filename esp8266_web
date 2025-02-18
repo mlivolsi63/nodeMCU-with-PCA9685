@@ -1,0 +1,701 @@
+#include <ESP8266WiFi.h>
+// ----------------------------------------
+// For the PWM Functions and PCA board
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+// ----------------------------------------
+
+const char* ssid     = "xxxx";
+const char* password = "xxxxxxxxxx";
+bool do_something=false;
+const byte maxPucks=8;
+
+
+WiFiClient client;
+WiFiServer server(80);
+
+
+Adafruit_PWMServoDriver pwm1 = Adafruit_PWMServoDriver(0x40);
+Adafruit_PWMServoDriver pwm2 = Adafruit_PWMServoDriver(0x41);
+
+//--------------------------------------------------------------------------
+// Internal pin mapping
+//  
+// GPIO       Physical Pin
+// 2          D4
+// 3          RX
+// 4          TX
+// 10         SD3
+// 12         D6
+// 13         D7
+// 14         D5
+// 16         D0
+//--------------------------------------------------------------------------
+// Pin 0 does nothing
+byte totalPins=24;
+byte totalPucks=8;
+short int  pins[] = {0, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0,1,2,3,4,5,6,7,8};
+
+int blueDirection=0;
+int greenDirection=1;
+int redDirection=0;
+
+
+void setup() {
+  Serial.begin(9600);
+
+  //----------------------------------------------
+  // Connect to Wi-Fi network with SSID and password
+  //----------------------------------------------  
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    // Serial.print(".");
+  }
+  //----------------------------------------------
+  // Print local IP address and start web server
+  //----------------------------------------------
+  // Serial.print("Connected - IP address: "); Serial.println(WiFi.localIP());
+  server.begin();
+  
+  Wire.begin();
+  //----------------------------------------------
+  // start working with the PWM
+  //----------------------------------------------
+  pwm1.begin();
+  pwm1.setPWMFreq(1600);  // This is the maximum PWM frequency
+  
+  pwm2.begin();
+  pwm2.setPWMFreq(1600);  // This is the maximum PWM frequency
+
+  
+}
+//============================================================================================================================================
+void setPinFunc(byte inPin) {
+    if (inPin != 99) {        
+        if(inPin < 16)   pwm1.setPWM(pins[inPin], 2048, 3092); // Fully on
+        else             pwm2.setPWM(pins[inPin], 2048, 3092); // Fully on
+    }    
+}
+
+
+//============================================================================================================================================
+// initializeColors
+// Only use when we're called to initialize (red is 255, green and blue set to 0 )
+//============================================================================================================================================
+
+void initializeColors(byte &inRed, byte &inGreen, byte &inBlue) {
+    inRed=255;
+    inGreen=0;
+    inBlue=0;
+
+    redDirection=0;
+    greenDirection=1;
+    blueDirection=0;
+
+}
+
+void  randColors(byte &inRed, byte &inGreen, byte &inBlue) {
+    inRed=random(0,255);
+    inGreen=random(0,255);
+    inBlue=random(0,255);
+   
+}
+
+
+//============================================================================================================================================
+// rainbowIt - Get the next color
+// Increment can be: (85, 3) (51,5) (17,15)   - do if you choose to increment by 85, then you'll only loop 3, whereas if you increment by 3
+//                                              then you can loop 85 times
+//============================================================================================================================================
+
+void  rainbowIt(byte &inRed, byte &inGreen, byte &inBlue, byte increment) {
+   if (redDirection != 0) {
+        if (redDirection > 0 ) inRed+=increment;
+        else                   inRed-=increment;
+        if (inRed == 0 && redDirection == -1) {
+            redDirection=0;
+            blueDirection=1;            
+        }
+        if (inRed == 255 && redDirection == 1) {
+            redDirection=0;
+            blueDirection=-1;
+        }
+   }
+   else {
+       if (greenDirection != 0) {
+            if (greenDirection > 0) inGreen +=increment;
+            else                    inGreen -=increment;
+            if (inGreen == 0 && greenDirection == -1) {
+                greenDirection=0;
+                redDirection=1;
+            }
+            if (inGreen == 255 && greenDirection == 1) {
+                greenDirection=0;
+                redDirection=-1;
+            }
+       }  
+       else {
+           if(blueDirection > 0)  inBlue +=increment;
+           else                   inBlue -=increment;               
+           if (inBlue == 0 && blueDirection == -1) {
+               blueDirection=0;
+               greenDirection=1;
+           }  
+           if (inBlue == 255 && blueDirection == 1) {
+               blueDirection=0;
+               greenDirection=-1;
+           }    
+       }       
+   }   
+   
+}
+
+void setPuck(byte inPuck, byte inRed, byte inGreen, byte inBlue) {
+    
+    float calcPercent=0;
+    float tickTotal=0;    
+    int   tickStart=0;
+    byte   pin=0;
+    byte   color=0;
+    
+    for (int i=1; i <= 3; i++) {  
+        pin = (3*inPuck)+i;
+        switch(i) {
+            case 1: color=inRed;   break;
+            case 2: color=inGreen; break;
+            case 3: color=inBlue;  break;
+        }
+        if(color == 255) {
+            if (pin < 16) pwm1.setPWM(pins[pin], 4096, 0);
+            else          pwm2.setPWM(pins[pin], 4096, 0);
+        }
+        else {   
+            if (color == 0) {
+                if (pin < 16) pwm1.setPWM(pins[pin], 0, 4096);
+                else          pwm2.setPWM(pins[pin], 0, 4096);
+            }
+            else {    
+                tickTotal=4096 * ((float)color/255);
+                tickStart=(4096-tickTotal)/2;
+
+                if (pin < 16) pwm1.setPWM(pins[pin], tickStart, (int)(tickTotal+tickStart));
+                else          pwm2.setPWM(pins[pin], tickStart, (int)(tickTotal+tickStart));
+            }    
+        }    
+    }    
+
+}
+
+
+void allLightsOff() {
+        for(int i=0; i < totalPucks; i++) {
+        setPuck(i, 0, 0, 0);
+    }    
+    do_something=false;                                  // one shot routine
+}
+
+void allLightsOn(byte inRed, byte inGreen, byte inBlue) {    
+    for(int i=0; i < totalPucks; i++) {
+        setPuck(i, inRed, inGreen, inBlue);
+    }        
+    do_something=false;                                  // one shot routine
+}
+   
+void roundAndRound(byte inEffect, byte inDelay, short inColorEffect, byte &inRed, byte &inGreen, byte &inBlue)
+{   
+    
+    
+    if (inEffect == 0 ) {        
+        for (int i=0; i < 5; i++) {
+            if (inColorEffect > 0) {
+                if (inColorEffect == 1) randColors(inRed, inGreen, inBlue);
+                else                    rainbowIt(inRed, inGreen, inBlue, 51);
+            }
+            for (int j=0; j < maxPucks; j++) {                
+                setPuck(j,  inRed, inGreen, inBlue);
+                delay(inDelay);
+                if (j >= 1) setPuck(j-1, 0, 0, 0);
+                else         setPuck(0, 0, 0, 0); 
+                delay(inDelay);              
+            }    
+        }        
+    } 
+    else {
+        for (int i=0; i < 5; i++) {
+            if (inColorEffect > 0) {
+                if (inColorEffect == 1) randColors(inRed, inGreen, inBlue);
+                else                    rainbowIt(inRed, inGreen, inBlue, 51);
+            }
+            
+            for (int j=7; j >=0; j--) {      
+                setPuck(j,  inRed, inGreen, inBlue);
+                delay(inDelay);
+                if (j <= 6)  setPuck(j+1, 0, 0, 0); 
+                else         setPuck(0, 0, 0, 0); 
+                delay(inDelay);              
+            }    
+        }        
+    }  
+    setPuck(0, 0, 0, 0);  
+}
+
+void pulse (byte inDelay, byte inMaxRed, byte inMaxGreen, byte inMaxBlue) {
+    
+    byte red=0;
+    byte green=0;
+    byte blue=0;
+    byte maxedRed=false;
+    byte maxedGreen=false;
+    byte maxedBlue=false;
+   
+    for (int looper=0; looper<5; looper++) {
+        red=0;
+        green=0;
+        blue=0;
+        maxedRed=false;
+        maxedGreen=false;
+        maxedBlue=false;
+
+        for (int i=0; i < 255; i+=15) {
+            if (!maxedRed || !maxedGreen || !maxedBlue)  {
+                if(i+red   < inMaxRed)    red+=15;
+                else maxedRed=true;
+                if(i+green < inMaxGreen)  green+=15;
+                else maxedGreen=true;
+                if(i+blue  < inMaxBlue)   blue+=15;
+                else maxedBlue=true;
+            
+                for(int i=0; i < totalPucks; i++) {
+                    setPuck(i, red, green, blue);
+                } 
+                delay(inDelay);       
+            }    
+        }   
+    }
+}
+
+void heartbeat(byte inRed) {
+    unsigned int looper=0;
+
+    while( looper < 5  ) {
+        looper++;
+        for (int i=0; i< maxPucks; i++) setPuck(i,  255, 0, 0);        
+        delay(150);
+        for (int i=0; i< maxPucks; i++)  setPuck(i,  0, 0, 0);
+        delay(150);
+        for (int i=0; i< maxPucks; i++)  setPuck(i,  255, 0, 0);
+        delay(150);
+        for (int i=0; i< maxPucks; i++)  setPuck(i,  0, 0, 0);
+        delay(600);       
+   }    
+}
+
+void bounce(byte inDelay, bool inColorEffect, byte inRed, byte inGreen, byte inBlue) {
+    if (inColorEffect > 0) {
+        if (inColorEffect == 1) randColors(inRed, inGreen, inBlue);
+        else                    rainbowIt(inRed, inGreen, inBlue, 51);
+    }
+
+    for (int i=0; i < maxPucks; i++) {
+        setPuck(i, inRed, inGreen, inBlue);
+        
+        if(i > 0) {
+            setPuck(i-1, 0, 0, 0);        
+        }    
+        else {
+            setPuck(maxPucks-1, 0, 0, 0);          
+        }    
+
+        delay(inDelay);      
+    }
+    for(int i=maxPucks-1; i >=0; --i) {
+        setPuck(i, inRed, inGreen, inBlue);
+        
+        if(i < maxPucks-1) {
+            setPuck(i+1, 0, 0, 0);        
+        }  
+        else {
+            setPuck(0, 0, 0, 0);            
+        } 
+        delay(inDelay);
+    }
+}
+void marquee(byte inDelay) {    
+    for(int i=0; i < maxPucks; i++) {
+        setPuck(i, 0, 0, 0);
+        if(i > 0) setPuck(i-1, 255, 64, 0);
+        else      setPuck(maxPucks-1, 255, 64, 0);        
+        delay(inDelay);
+    }
+}
+
+
+void waiting(byte inDelay) {
+    allLightsOff(); 
+
+    for (int i=0; i < maxPucks; i++) {        
+        for (int j=0; j < maxPucks-i; j++)  {
+             setPuck(j, 40,40,255);
+             // Serial.print("Setting puck "); Serial.print(j); Serial.println(" to on");
+             if (j > 0) {
+                   setPuck(j-1, 0, 0, 0);
+                   // Serial.print("Setting puck "); Serial.print(j-1); Serial.println(" to off");
+             }  
+
+             delay(inDelay);
+        } 
+    }
+
+}
+
+//--------------------------------------------------------------------------------
+// if the current line is blank, you got two newline characters in a row.
+// that's the end of the client HTTP request, so send a response:
+//--------------------------------------------------------------------------------
+void drawHTMLheader() {
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-type:text/html");
+    client.println("Connection: close");
+    client.println();
+}
+
+
+void drawHTMLbody() {
+   client.println("<!DOCTYPE html><html>");
+   client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+   client.println("<title>PCA 9685</title>");
+   client.println("<link rel=\"icon\" href=\"data:\">");
+   client.println("<style>");
+   client.println("html {");
+   client.println("font-family: Helvetica;");
+   client.println("display: inline-block;");
+   client.println("margin: 0px auto;");
+   client.println("text-align: center;");
+   client.println("}");
+   client.println(".button {");
+   client.println("background-color: #195B6A;");
+   client.println("border: none;");
+   client.println("color: white;");
+   client.println("padding: 12px 30px;");
+   client.println("text-decoration: none;");
+   client.println("font-size: 18px;");
+   client.println("margin: 2px;");
+   client.println("cursor: pointer;");
+   client.println("}");
+   client.println(".button2 {");
+   client.println("background-color: #77878A;");
+   client.println("}");
+   client.println("table {");
+   client.println("   border-collapse: collapse;");
+   client.println("}");
+   client.println("</style>");
+   client.println("<script>");
+   client.println("  function disableFields(inRoutine) {");
+   client.println("     document.getElementById(\"effect\").disabled = false; ");
+   client.println("     document.getElementById(\"delay\").disabled = false; ");
+   client.println("     document.getElementById(\"colorEffect\").disabled = false; ");
+   client.println("     document.getElementById(\"red\").disabled = false; ");
+   client.println("     document.getElementById(\"green\").disabled = false; ");
+   client.println("     document.getElementById(\"blue\").disabled = false; ");
+   client.println("");
+   client.println("     switch(inRoutine.value) {");
+   client.println("         case '0': ");  
+   client.println("                 document.getElementById(\"effect\").disabled = true; ");
+   client.println("                 document.getElementById(\"delay\").disabled = true; ");
+   client.println("                 document.getElementById(\"colorEffect\").disabled = true; ");
+   client.println("                 document.getElementById(\"red\").disabled = true; ");
+   client.println("                 document.getElementById(\"green\").disabled = true; ");
+   client.println("                 document.getElementById(\"blue\").disabled = true; ");
+   client.println("                 break;");
+   client.println("         case '1': ");
+   client.println("                 document.getElementById(\"effect\").disabled = true; ");
+   client.println("                 document.getElementById(\"delay\").disabled = true; ");
+   client.println("                 document.getElementById(\"colorEffect\").disabled = true; ");
+   client.println("                 break;");
+   client.println("         case '2': ");
+   client.println("                 break;");
+   client.println("         case '3': "); // Pulse
+   client.println("                 document.getElementById(\"effect\").disabled = true; ");
+   client.println("                 break;");
+   client.println("         case '4': ");  // Hearbeat
+   client.println("                 document.getElementById(\"effect\").disabled = true; ");
+   client.println("                 document.getElementById(\"delay\").disabled = true; ");
+   client.println("                 document.getElementById(\"green\").disabled = true; ");
+   client.println("                 document.getElementById(\"blue\").disabled = true; ");   
+   client.println("                 document.getElementById(\"colorEffect\").disabled = true; ");
+   client.println("                 break;");
+   client.println("         case '5': ");   // Bounce      
+   client.println("                 document.getElementById(\"effect\").disabled = true; ");
+   client.println("                 break;");
+   client.println("         case '6': ");  // marquee   
+   client.println("                 document.getElementById(\"effect\").disabled = true; ");   
+   client.println("                 document.getElementById(\"green\").disabled = true; ");
+   client.println("                 document.getElementById(\"blue\").disabled = true; ");   
+   client.println("                 document.getElementById(\"colorEffect\").disabled = true; ");
+   client.println("                 break;");
+   client.println("         case '7': // round and round"); // Waiting circle - like when you wait for a page to reload
+   client.println("                 document.getElementById(\"effect\").disabled = true; ");   
+   client.println("                 document.getElementById(\"colorEffect\").disabled = true; ");
+   client.println("                 document.getElementById(\"red\").disabled = true; ");
+   client.println("                 document.getElementById(\"green\").disabled = true; ");
+   client.println("                 document.getElementById(\"blue\").disabled = true; ");
+   client.println("                 break;");
+   client.println("        default:");
+   client.println("              alert(inRoutine.value);");
+   client.println("     }");
+   client.println("  } ");
+   client.println("</script>");
+   client.println("</head>");
+   client.println("<body><h1>Dual PCA9685</h1>");
+   client.println("<form method='get'>");
+   
+
+   client.println("<table cellpadding=0 cellspacing=0 border=1>");
+
+   client.println("<tr>\n\t<td width=100>&nbsp;</td>\n\t<td>Manually turn on pin </td>\n\t<td><select name=pin onChange=\"this.form.submit()\">");
+   client.println("<option value=99 selected> 0 null </option>");
+   for (int i=1; i <= totalPins; i++) {
+        client.print("<option value="); client.print(i); client.print(">"); 
+        client.print(i); 
+        switch(i%3) {
+            case 1: client.print(" Red ");   break;
+            case 2: client.print(" Green "); break;
+            case 0: client.print(" Blue ");  break;
+        }
+        client.println("</option>");
+    }
+    client.println("</td></tr>");
+    client.println("<tr height=20><td colspan=3>&nbsp;</td></tr>");
+
+    client.println("<tr><td></td>");
+    client.println("   <th>Routine</th>");
+    client.println("   <td><select id=routine name=routine onchange=\"disableFields(this)\">");
+    client.println("        <option value=0>0-All Lights off</option>");
+    client.println("        <option value=1>1-All Lights on</option>");
+    client.println("        <option value=2>2-Round and Round</option>");
+    client.println("        <option value=3>3-Pulse</option>");
+    client.println("        <option value=4>4-Heartbeat</option>");
+    client.println("        <option value=5>5-Bounce</option>");
+    client.println("        <option value=6>6-Marquee</option>");
+    client.println("        <option value=7>7-Waiting Circle</option>");
+    client.println("        </select></td>");
+    client.println("</tr>");
+    client.println("<tr>");
+    client.println("  <td></td>");
+    client.println("   <th>Effect<br>(optional)</th>");
+    client.println("   <td><select name=effect id=effect>");
+    client.println("       <option value=0>Clockwise</option>");
+    client.println("       <option value=1>Counter CLockwise</option>");   
+    client.println("       </select></td>");
+    client.println("</tr>");
+    
+   client.println("<tr>");
+   client.println("   <td></td>");
+   client.println("   <th>Speed <br> The higher the number, the slower</th>");
+   client.println("   <td><select name=delay id=delay>");
+   client.println("      <option value=10>10</option>");
+   client.println("      <option value=20>20</option>");
+   client.println("      <option value=30>30</option>");
+   client.println("      <option value=40>40</option>");
+   client.println("      <option value=50 selected>50</option>");
+   client.println("      <option value=60>60</option>");
+   client.println("      <option value=70>70</option>");
+   client.println("      <option value=80>80</option>");
+   client.println("      <option value=90>90</option>");
+   client.println("      <option value=100>100</option>");
+   client.println("      <option value=120>120</option>");
+   client.println("      <option value=140>140</option>");
+   client.println("      <option value=160>160</option>");
+   client.println("      <option value=180>180</option>");
+   client.println("      <option value=200>200</option>");   
+   client.println("   </select></td>");
+   client.println("</tr>");
+   client.println("<tr>");
+   client.println("   <td></td>");
+   client.println("   <th>Color Effect</th>");
+   client.println("   <td><select name=colorEffect id=colorEffect>");
+   client.println("      <option value=0>None</option>");
+   client.println("      <option value=1>Random Colors</option>");
+   client.println("      <option value=2>Cycle ROYGBIV</option>");
+   client.println("   </select></td>");
+   client.println("</tr>");
+   client.println("<tr>");
+   client.println("   <td></td>");
+   client.println("   <th>Red</th>");
+   client.println("   <td><input name=red id=red value=255></td>");
+   client.println("</tr>");
+   client.println("<tr>");
+   client.println("   <td></td>");
+   client.println("   <th>Green</th>");
+   client.println("   <td><input name=green id=green value=0></td>");
+   client.println("</tr>");
+   client.println("<tr>");
+   client.println("   <td></td>");
+   client.println("   <th>Blue</th>");
+   client.println("   <td><input name=blue id=blue value=0></td>");
+   client.println("</tr>");
+   client.println("");
+   client.println("</table>");
+   client.println("<p><button class=\"button button2\">Submit</button></p>");   
+   
+}   
+
+void drawHTMLfooter() {          
+    client.println("<input type=hidden name=isCli value=0>");
+    client.println("</body></html>");
+    client.println();
+}
+
+
+
+
+
+//---------------------------------------------------------------------------------------------
+// We are going to follow the regular QS convention and not the BS I see on the message boards
+// id=1&cl=2&cli=0
+//---------------------------------------------------------------------------------------------
+String parseQS(String inString, String inVar) {
+        
+    inString=inString.substring(0,inString.indexOf("HTTP/1"));                                   // Strip out the HTTP stuff at the end
+    String tmpString="";
+
+    int pos1= inString.indexOf(inVar);    
+    if (pos1 >= 0) {
+        int pos2 = inString.indexOf("&", pos1+1);                                                  // I'm looking for the start of the next var, or the end of the line where there isn't one        
+
+        if (pos2 > 0) {     
+            tmpString=inString.substring(pos1 + inVar.length()+1, pos2);            
+        }
+        else {
+            tmpString=inString.substring(pos1 + inVar.length()+1);
+        }
+    }
+    return tmpString;
+}
+
+
+//============================================================================================================================================
+String header="";
+
+unsigned long currentTime = millis();                                              // Current time
+unsigned long previousTime = 0;                                                    // Previous time
+const long timeoutTime = 2000;                                                     // timeout (2000ms = 2 seconds) 
+bool looper=true;
+bool isCurrentLine=true;
+bool isCli=false;
+
+unsigned short qsRoutine=0;
+unsigned short qsEffect=0;
+unsigned short qsDelay=10;
+unsigned short qsColorEffect=1;
+byte qsRed=255;
+byte qsGreen=0;
+byte qsBlue=0;
+
+String tmpString;
+byte setPin=0;
+
+
+void loop(){
+
+    client = server.available();                                                   // Listen for incoming clients
+    //Serial.println("Waiting for clients");
+
+    if (client) {                                                                  // If a new client connects,       
+       // Serial.print(millis()); Serial.println("--> client connected");            // print a message out in the serial port
+
+        currentTime = millis();
+        previousTime = currentTime;                                                // At first, it will force the fall into the while loop because 0 will always be less than 2000
+        tmpString.clear();
+        isCurrentLine=true;
+        looper=true;                                                               // I'd rather do this gracefully than issue a 'break' (personal preference) 
+        
+
+        while (looper && client.connected() && currentTime - previousTime <= timeoutTime) {  // loop while the client's connected                    
+            if (client.available()) {                                              // There's bytes coming in
+                char c = client.read();                                            // read a byte, then
+                // Serial.write(c);                                                // print it out the serial monitor
+                header += c;                                                       // Build the header
+                if (c == '\n') {                                                   // if the byte is a newline character ...
+                    if (!isCurrentLine) {                                          // .. process the line we have, which means, draw the screen for the browser
+                        // Serial.println("We've got the entire query string");
+                        isCli = atoi(parseQS(header.substring(6), "isCli").c_str());
+                        tmpString = parseQS(header.substring(6), "pin");         setPin=atoi(tmpString.c_str());
+                        if ((setPin >=  1 ) && (setPin < 99)) {
+                            allLightsOff();
+                            setPinFunc(setPin);
+                        }
+                        else {
+                            qsRoutine = atoi(parseQS(header.substring(6), "routine").c_str());
+                            qsEffect  = atoi(parseQS(header.substring(6), "effect").c_str());
+                            qsDelay   = atoi(parseQS(header.substring(6), "delay").c_str());
+                            qsColorEffect = atoi(parseQS(header.substring(6), "colorEffect").c_str());
+                            qsRed      = atoi(parseQS(header.substring(6), "red").c_str());
+                            qsGreen    = atoi(parseQS(header.substring(6), "green").c_str());
+                            qsBlue     = atoi(parseQS(header.substring(6), "blue").c_str());
+                            do_something=true;                                          
+                        }    
+                        drawHTMLheader();                        
+
+                        if (!isCli) {                                             // we aren't CLI, we are HTML
+                            drawHTMLbody();                                                           
+                            drawHTMLfooter();
+                        }                            
+                        looper=false;                                              // Break out of the while loop (not via break.. too harsh)
+                    } 
+                    else {                                                         // if you got a newline, then clear currentLine
+                        isCurrentLine=false;
+                    }
+                } 
+                else {
+                    if (c != '\r') {           // if you got anything else but a carriage return character,
+                        isCurrentLine=true;
+                    }
+                 }                      
+             }
+             else {
+                 // Serial.println("Nothing...");
+                 client.stop();
+             }
+             currentTime = millis();
+           
+         }                                     // end while        
+         // Serial.println("Disconnecting from client");
+         header.clear();
+         client.stop();         
+     }
+
+     if (do_something) {
+         // Serial.println("we should be doing something");
+         switch(qsRoutine) {
+             case 0:  allLightsOff();
+                      do_something=false;
+             break;
+             case 1:  allLightsOn(qsRed, qsGreen, qsBlue);
+                      do_something=false;
+             break;
+             case 2:                       
+                      roundAndRound(qsEffect, qsDelay, qsColorEffect, qsRed, qsGreen, qsBlue);
+                      // do_something=false;
+             break;                                
+             case 3:  pulse( qsDelay, qsRed, qsGreen, qsBlue) ;
+                      do_something=true;
+             break;                                
+             case 4:  heartbeat(qsRed);
+                      do_something=true;
+             break;                                
+             case 5:  bounce(qsDelay, qsColorEffect, qsRed, qsGreen, qsBlue);
+                      do_something=true;
+             break;                                
+             case 6:  marquee(qsDelay);
+                      do_something=true;
+             break;                                
+             case 7:  waiting(qsDelay);
+                      do_something=true;
+             break;                                                      
+         }                          
+     }
+ 
+     if(! do_something) delay(100);
+}
